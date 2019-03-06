@@ -1,0 +1,143 @@
+%[
+
+open Purr.Data.Ast
+open Fable.Core
+open Fable.Core.JsInterop
+open System.Text.RegularExpressions
+
+[<Emit("parseInt($1, $0)")>]
+let parseInt radix x = jsNative
+
+[<Emit("JSON.parse($0)")>]
+let parseJsonStringPrim s = jsNative
+
+let parseJsonString (s:string) =
+  let s = Regex.Replace(Regex.Replace(s, "\\r", "\\r"), "\\n", "\\n")
+  in parseJsonStringPrim s
+
+let makeInt r xs = xs |> fixDigits |> parseInt r
+let octal = makeInt 8
+let binary = makeInt 2
+let hex = makeInt 16
+let decimal = makeInt 10
+
+%]
+
+Purr : Program {
+  Program
+    = xs:Declaration* end   %[ Program(xs) ]%
+
+
+  Declaration =
+    | Define
+
+
+  Define =
+    | define_ n:Name "=" e:Expr   %[ Define(n, e) ]%
+
+  Expr =
+    | let_ n:Name "=" e:Expr in_ b:Expr  %[ Let(n, e, b) ]%
+    | if_ t:Expr then_ c:Expr else_ a:Expr  %[ If(t, c, a) ]%
+    | PipeExpr
+
+  PipeExpr =
+    | l:PipeExpr "|>" r:PipeExpr
+
+
+  
+
+
+  // -- Lexical -------------------------------------------------------
+  newline = "\n" | "\r"
+  line = (~newline any)*
+  comment = "//" line
+  space += comment
+
+  id_start = letter | "_"
+  id_rest = id_start | digit
+  id = id_start id_rest*
+
+  kw<word> = word ~id_rest
+
+  binary_operator
+    = "=="      
+    | ">="      
+    | ">>"      
+    | ">"       
+    | "<="      
+    | "<<"      
+    | "<"       
+    | "++"      
+    | "+"       
+    | "-->"     
+    | "-"       
+    | "**"      
+    | "*"       
+    | "/="      
+    | "/"       
+    | and_      
+    | or_       
+    | in_       
+
+  unary_operator
+    = not_
+
+  octal_digit = "0" .. "7" | "_"
+  hex_digit = raw_hex_digit | "_"
+  raw_hex_digit = "0" .. "9" | "a" .. "f" | "A" .. "F"
+  bin_digit = "0" | "1" | "_"
+  decimal_digit = "0" .. "9" | "_"
+
+  integral_number
+    = "0o" xs:octal_digit+    %[ octal xs ]%
+    | "0x" xs:hex_digit+      %[ hex xs ]%
+    | "0b" xs:bin_digit+      %[ binary xs ]%
+    | ~"_" xs:decimal_digit+  %[ decimal xs ]%
+
+  integer
+    = "-" x:integral_number   %[ Number(x) ]%
+    | "+" x:integral_number   %[ Number(x) ]%
+    | x:integral_number       %[ Number(x) ]%
+
+  decimal
+    = "-"  i:decimal_digit+ "." d:decimal_digit+
+      %[ Number(double ("-" + i + "." + d)) ]%
+
+    | "+"  i:decimal_digit+ "." d:decimal_digit+
+      %[ Number(double (i + "." + d)) ]%
+
+    | ~"_" i:decimal_digit+ "." d:decimal_digit+
+      %[ Number(double (i + "." + d)) ]%
+
+
+  boolean
+    = true_     %[ Boolean(true) ]%
+    | false_    %[ Boolean(false) ]%
+
+
+  raw_character
+    = ~"\"\"\"" any
+
+  escape_sequence
+    = "b"
+    | "f"
+    | "n"
+    | "r"
+    | "t"
+    | "u" unicode_escape
+    | "\""
+    | "\\"
+
+  unicode_escape
+    = raw_hex_digit raw_hex_digit raw_hex_digit raw_hex_digit
+
+  string_character
+    = ~("\"" | "\\") any
+    | "\\" escape_sequence
+
+  double_string
+    = "\"" string_character* "\""
+
+  string
+    = x:double_string   %[ parseJsonString x ]%
+}

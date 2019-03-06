@@ -2,20 +2,22 @@ module Purr.Data.Ast
 
 type Name = string
 
+and Program = Declaration list
+
 and Declaration =
   | Define of Name * Expr
 
 and Expr =
-  | Lambda of Name list * body: Expr
   | Let of Name * value: Expr * body: Expr
-  | Load of Name
-  | Number of double
-  | Text of string
-  | Symbol of description: string
-  | Boolean of bool
-  | Nothing
+  | If of test: Expr * consequent: Expr * alternate: Expr
   | Record of parent: Expr * messages: Message list
   | Send of object: Expr * message: Label * arguments: Expr list
+  | Symbol of description: string
+  | Load of Name
+  | Nothing
+  | Number of double
+  | Text of string
+  | Boolean of bool
 
 and Message = Label * Name list * Expr
 

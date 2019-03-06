@@ -38,6 +38,12 @@ and evaluate (env:Environment) (expr:Expr) : PValue =
       let newEnv = Primitives.extendEnv [name, value] env
       in evaluate newEnv body
 
+  | If (test, consequent, alternate) ->
+      if Primitives.toBoolean (evaluate env test) then
+        evaluate env consequent
+      else
+        evaluate env alternate
+
   | Load (name) ->
       match env.Lookup name with
       | Some value -> value
