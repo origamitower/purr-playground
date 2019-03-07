@@ -10,6 +10,7 @@ and Declaration =
 and Expr =
   | Let of Name * value: Expr * body: Expr
   | If of test: Expr * consequent: Expr * alternate: Expr
+  | Lambda of parameters: string list * body: Expr
   | Record of parent: Expr * messages: Message list
   | Send of object: Expr * message: Label * arguments: Expr list
   | Symbol of description: string
