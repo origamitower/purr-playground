@@ -91,6 +91,21 @@ and PrimitiveProcedure(fn: Evaluator * PurrObject * PurrObject list -> PurrObjec
       fn(eval, context, args)
 
 
+and PurrThunk(expr: Expr) =
+  let mutable value : PurrObject option = None
+
+  member __.Expr = expr
+
+  member self.Force(eval, environment) =
+    match value with
+    | Some value -> value
+    | None ->
+        let result = eval environment expr
+        value <- Some result
+        result 
+          
+
+
 and Environment(parent: Environment option) =
   let mutable bindings : Map<string, PurrObject> = Map.empty
 
