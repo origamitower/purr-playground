@@ -9,6 +9,18 @@ type PurrLabel =
   | LSymbol of obj
 
 
+[<CustomEquality; NoComparison>]
+type Boxed<'T> =
+  { value: 'T }
+
+  override self.Equals(that) =
+    match that with
+    | :? Boxed<'T> as that -> LanguagePrimitives.PhysicalEquality self that
+    | _ -> false
+
+  override self.GetHashCode() = LanguagePrimitives.PhysicalHash self
+
+
 let INVOKE = LName "invoke"
 
 
@@ -23,9 +35,25 @@ and IMessageable =
   abstract member Send : Evaluator * PurrLabel * PurrObject list -> PurrObject
 
 
+and PurrType =
+  | TText of string
+  | TNumber of double
+  | TBoolean of bool
+  | TSymbol of description: string
+  | TProcedure of Boxed<(Evaluator * PurrObject * PurrObject list -> PurrObject)>
+  | TRecord
+  with
+    member self.Name =
+      match self with
+      | TText _ -> "Text"
+      | TNumber _ -> "Number"
+      | TBoolean _ -> "Boolean"
+      | TSymbol _ -> "Symbol"
+      | TProcedure _ -> "Procedure"
+      | TRecord -> "Record"
+
 and PurrObjectState = {
-  typeName: string
-  state: Map<string, obj>
+  typeData: PurrType
   hashFunction: (PurrObject -> int) option
   equalityFunction: (PurrObject -> PurrObject -> bool) option
   parent: PurrObject option
@@ -39,8 +67,7 @@ and PurrObject(state: PurrObjectState) =
       dict.Add(label, callable)
     dict
 
-  member __.TypeName = state.typeName
-  member __.State = state.state
+  member __.Data = state.typeData
   member __.Parent = state.parent
   member __.Messages = messages
 
@@ -64,7 +91,7 @@ and PurrObject(state: PurrObjectState) =
         let method = messages.Item(label)
         in method.Invoke(eval, self, args)
       with
-      | :? KeyNotFoundException -> failwithf "%s does not understand %A" state.typeName label
+      | :? KeyNotFoundException -> failwithf "%s does not understand %A" state.typeData.Name label
 
   interface ICallable with
     member self.Invoke(eval, context, args) =
@@ -137,39 +164,61 @@ module Primitives =
   let OR = LName "or"
   let NOT = LName "not"
 
+  let textData state =
+    match state with
+    | TText s -> s
+    | _ -> failwithf "Expected a Text, got %s" state.Name
+
+  let numberData state =
+    match state with
+    | TNumber n -> n
+    | _ -> failwithf "Expected a Number, got %s" state.Name
+
+  let boolData state =
+    match state with
+    | TBoolean b -> b
+    | _ -> failwithf "Expected a Boolean, got %s" state.Name
+
+  let symbolData state =
+    match state with
+    | TSymbol s -> s
+    | _ -> failwithf "Expected a Symbol, got %s" state.Name
+
+  let procedureData state =
+    match state with
+    | TProcedure p -> p
+    | _ -> failwithf "Expected a Procedure, got %s" state.Name
+
   let proc fn = PrimitiveProcedure(fn)
 
   let private primHash (x:PurrObject) = 
-    hash (x.TypeName, x.State, x.Parent)
+    hash (x.Data, x.Parent)
 
   let private primEq (a:PurrObject) (b:PurrObject) =
-    (a.TypeName, a.State, a.Parent) = (b.TypeName, b.State, b.Parent)
+    (a.Data, a.Parent) = (b.Data, b.Parent)
 
   let private defMessages (obj:PurrObject) messages =
     for (name, callable) in messages do
       obj.AddMethod(name, callable)
 
   let record parent messages = PurrObject({
-    typeName = "Record"
-    state = Map.empty
+    typeData = TRecord
     hashFunction = None
     equalityFunction = None
     parent = parent
     messages = messages
   })
 
-  let primitive typeName parent value messages = PurrObject({
-    typeName = typeName
-    state = Map.ofList ["value", box value]
+  let primitive typeData parent messages = PurrObject({
+    typeData = typeData
     hashFunction = Some primHash
     equalityFunction = Some primEq
     parent = Some parent
     messages = messages
   })
 
-  let special typeName parent state messages = PurrObject({
-    typeName = typeName
-    state = state
+  let special typeData parent messages = PurrObject({
+    typeData = typeData
     hashFunction = None
     equalityFunction = None
     parent = Some parent
@@ -190,16 +239,14 @@ module Primitives =
   let SymbolProto = record (Some Root) []
 
 
-  let text (s:string) = primitive "Text" TextProto s []
+  let text (s:string) = primitive (TText s) TextProto []
 
-  let number (n:double) = primitive "Number" NumberProto n []
+  let number (n:double) = primitive (TNumber n) NumberProto []
 
-  let boolean (b:bool) = primitive "Boolean" BoolProto b []
+  let boolean (b:bool) = primitive (TBoolean b) BoolProto []
 
   let symbol (s:string) = 
-    special "Symbol" SymbolProto
-            (Map.ofList ["description", box s])
-            []
+    special (TSymbol s) SymbolProto []
 
   // -- Common messages --
   defMessages Root
@@ -215,7 +262,7 @@ module Primitives =
   defMessages NumberProto
     [
       DESCRIBE, proc (fun (eval, self, args) -> 
-        let value = self.State.Item("value") :?> double
+        let value = numberData self.Data
         in text (sprintf "%s" (value.ToString("N")))
       )
     ]
@@ -223,7 +270,7 @@ module Primitives =
   defMessages TextProto
     [
       DESCRIBE, proc (fun (eval, self, args) ->
-        let value = self.State.Item("value") :?> string
+        let value = textData self.Data
         in text (sprintf "%A" value)
       )
     ]
@@ -231,7 +278,7 @@ module Primitives =
   defMessages BoolProto
     [
       DESCRIBE, proc (fun (eval, self, args) ->
-        let value = self.State.Item("value") :?> bool
+        let value = boolData self.Data
         in text (sprintf "%b" value)
       )
     ]
@@ -239,7 +286,7 @@ module Primitives =
   defMessages SymbolProto
     [
       DESCRIBE, proc (fun (eval, self, args) ->
-        let desc = self.State.Item("description") :?> string
+        let desc = symbolData self.Data
         in text (sprintf "Symbol(%A)" desc)
       )
     ]
