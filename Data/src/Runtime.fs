@@ -24,7 +24,12 @@ type Boxed<'T> =
 let INVOKE = LName "invoke"
 
 
-type Evaluator = Environment -> Expr -> PurrObject
+type Evaluator = IEnvironment -> Expr -> PurrObject
+
+
+and LookupValue =
+  | Object of PurrObject
+  | Thunk of PurrThunk
 
 
 and ICallable =
@@ -35,12 +40,17 @@ and IMessageable =
   abstract member Send : Evaluator * PurrLabel * PurrObject list -> PurrObject
 
 
+and IEnvironment =
+  abstract member Lookup : string -> LookupValue option
+
+
 and PurrType =
   | TText of string
   | TNumber of double
   | TBoolean of bool
   | TSymbol of description: string
   | TProcedure of Boxed<(Evaluator * PurrObject * PurrObject list -> PurrObject)>
+  | TLambda of Boxed<PurrClosure>
   | TRecord
   with
     member self.Name =
@@ -50,6 +60,7 @@ and PurrType =
       | TBoolean _ -> "Boolean"
       | TSymbol _ -> "Symbol"
       | TProcedure _ -> "Procedure"
+      | TLambda _ -> "Lambda"
       | TRecord -> "Record"
 
 and PurrObjectState = {
@@ -99,14 +110,15 @@ and PurrObject(state: PurrObjectState) =
       in messageable.Send(eval, INVOKE, args)
 
 
-and PurrClosure(environment: Environment, parameters: string list, body: Expr) =
+and PurrClosure(environment: IEnvironment, parameters: string list, body: Expr) =
   member __.Environment = environment
   member __.Parameters = parameters
   member __.Body = body
 
   interface ICallable with
     member self.Invoke(eval, context, args) =
-      let newEnv = environment.Extend(List.zip parameters args)
+      let args = List.map Object args
+      let newEnv = Environment.Extend(environment, List.zip parameters args)
       in eval newEnv body
 
 
@@ -123,7 +135,7 @@ and PurrThunk(expr: Expr) =
 
   member __.Expr = expr
 
-  member self.Force(eval, environment) =
+  member self.Force(eval: Evaluator, environment) =
     match value with
     | Some value -> value
     | None ->
@@ -133,28 +145,34 @@ and PurrThunk(expr: Expr) =
           
 
 
-and Environment(parent: Environment option) =
-  let mutable bindings : Map<string, PurrObject> = Map.empty
+and Environment(parent: IEnvironment option) =
+  let mutable bindings : Map<string, LookupValue> = Map.empty
 
   member __.Parent = parent
 
-  member __.Lookup (name:string) = 
-    Map.tryFind name bindings
-
-  member __.Define (name:string, value: PurrObject) =
+  member __.Define (name:string, value: LookupValue) =
     bindings <- Map.add name value bindings
 
-  member self.Extend (bindings: (string * PurrObject) list) =
-    let newEnv = Environment(Some self)
+  static member Extend (env: IEnvironment, bindings: (string * LookupValue) list) =
+    let newEnv = Environment(Some env)
     for (name, value) in bindings do
       newEnv.Define(name, value)
     newEnv
 
+  interface IEnvironment with
+    member self.Lookup name =
+      match Map.tryFind name bindings with
+      | Some v -> Some v
+      | None ->
+          match parent with
+          | Some parent -> parent.Lookup name
+          | None -> None
 
 
 [<RequireQualifiedAccess>]
 module Primitives =
   let INVOKE = INVOKE
+  let THEN_ELSE = LName "if"
   let DESCRIBE = LName "describe"
   let ADD = LName "+"
   let SUBTRACT = LName "-"
@@ -163,6 +181,8 @@ module Primitives =
   let AND = LName "and"
   let OR = LName "or"
   let NOT = LName "not"
+
+  let extendEnv bindings env = Environment.Extend(env, bindings)
 
   let textData state =
     match state with
@@ -186,8 +206,19 @@ module Primitives =
 
   let procedureData state =
     match state with
-    | TProcedure p -> p
+    | TProcedure p -> p.value
     | _ -> failwithf "Expected a Procedure, got %s" state.Name
+
+  let lambdaData state =
+    match state with
+    | TLambda p -> p.value
+    | _ -> failwithf "Expected a Lambda, got %s" state.Name
+
+
+  let intoBox x = { value = x }
+
+  let send (obj:IMessageable) eval label args =
+    obj.Send(eval, label, args)
 
   let proc fn = PrimitiveProcedure(fn)
 
@@ -238,6 +269,10 @@ module Primitives =
 
   let SymbolProto = record (Some Root) []
 
+  let ProcedureProto = record (Some Root) []
+
+  let LambdaProto = record (Some Root) []
+
 
   let text (s:string) = primitive (TText s) TextProto []
 
@@ -247,6 +282,12 @@ module Primitives =
 
   let symbol (s:string) = 
     special (TSymbol s) SymbolProto []
+
+  let lambda env parameters body =
+    special (PurrClosure(env, parameters, body) |> intoBox |> TLambda) LambdaProto []
+
+  let procedure fn =
+    special (TProcedure (intoBox fn)) ProcedureProto []
 
   // -- Common messages --
   defMessages Root
@@ -291,3 +332,25 @@ module Primitives =
       )
     ]
 
+  defMessages ProcedureProto
+    [
+      INVOKE, proc (fun (eval, self, args) ->
+        let fn = procedureData self.Data
+        in fn(eval, self, args)
+      )
+    ]
+
+  defMessages LambdaProto
+    [
+      INVOKE, proc (fun (eval, self, args) ->
+        let fn = lambdaData self.Data :> ICallable
+        in fn.Invoke(eval, self, args)
+      )
+    ]
+
+  // More operations
+  let handleNothingAsNone (obj:PurrObject) =
+    if obj = Nothing then None else Some obj
+
+  let closure env parameters body =
+    PurrClosure(env, parameters, body)

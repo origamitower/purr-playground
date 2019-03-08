@@ -9,4 +9,8 @@
     <Compile Include="Interpreter.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" Version="2.0.1" />
+    <PackageReference Include="Fable.Import.Node" Version="0.4.3" />
+  </ItemGroup>
 </Project>
